@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Control por Voz — 11 Órdenes (fuzzy + sinónimos)</title>
+  <style>
+    :root { --bg:#0b1020; --card:#121a33; --muted:#94a3b8; --ok:#22c55e; --warn:#f59e0b; --err:#ef4444; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial; background:linear-gradient(180deg,#0b1020,#0b1020 40%,#0e1730); color:#e5e7eb; }
+    header { padding: 24px 16px; text-align:center; }
+    h1 { margin:0; font-size: clamp(1.2rem, 1.5vw + 1rem, 2rem); letter-spacing: .3px; }
+    main { max-width: 980px; margin: 0 auto; padding: 16px; }
+    .grid { display:grid; grid-template-columns: 1fr; gap:16px; }
+    @media (min-width: 880px){ .grid { grid-template-columns: 1.2fr .8fr; } }
+    .card { background:var(--card); border:1px solid rgba(255,255,255,.06); border-radius: 16px; padding: 16px; box-shadow: 0 6px 30px rgba(0,0,0,.35); }
+    .row { display:flex; gap: 12px; align-items:center; flex-wrap:wrap; }
+    .muted { color:var(--muted); font-size:.95rem; }
+    .chip { display:inline-flex; align-items:center; gap:8px; border:1px solid rgba(255,255,255,.12); padding:6px 10px; border-radius: 999px; font-size:.9rem; }
+    .cmd { background:#0b132a; border:1px solid rgba(255,255,255,.1); padding:8px 10px; border-radius:8px; margin:4px 0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .ok { color:var(--ok); }
+    .warn { color:var(--warn); }
+    .err { color:var(--err); }
+    button { appearance:none; border:none; border-radius: 14px; padding: 14px 18px; font-weight:600; color:#0b1020; background:#60a5fa; cursor:pointer; transition: transform .06s ease, filter .2s ease; }
+    button:hover { filter: brightness(1.05); }
+    button:active { transform: translateY(1px); }
+    button[aria-pressed="true"] { background:#34d399; }
+    .btn-secondary { background:#a78bfa; color:#0b1020; }
+    .btn-ghost { background:transparent; color:#e5e7eb; border:1px solid rgba(255,255,255,.18); }
+    .list { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+    @media (max-width:640px){ .list { grid-template-columns: 1fr; } }
+    .log { height: 180px; overflow:auto; background:#0a0f1f; border:1px solid rgba(255,255,255,.1); border-radius:12px; padding:10px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size:.9rem; }
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; border:1px solid rgba(255,255,255,.2); padding: 2px 6px; border-radius: 6px; background:#111827; color:#e5e7eb; }
+    footer { text-align:center; padding: 16px; color:var(--muted); font-size:.9rem; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Control por Voz</h1>
+    <p class="muted">
+      Di <b>“Axel …”</b> la app lo entiende y lo mapea a una de las 11 órdenes.
+    </p>
+  </header>
+
+  <main class="grid">
+    <section class="card">
+      <div class="row" style="justify-content:space-between; align-items:flex-start">
+        <div>
+          <div class="row" style="gap:8px; align-items:center">
+            <button id="btnMic" aria-pressed="false">🎤 Iniciar</button>
+            <button id="btnTest" class="btn-secondary">Probar texto</button>
+            <button id="btnClear" class="btn-ghost">Limpiar</button>
+          </div>
+          <p class="muted">Atajo: <span class="kbd">Espacio</span> inicia/detiene escucha.</p>
+        </div>
+        <div class="chip" title="Estado">
+          <span id="statusDot">●</span><span id="statusText">inactivo</span>
+        </div>
+      </div>
+
+      <h3>Texto reconocido</h3>
+      <div id="transcript" class="cmd" aria-live="polite">—</div>
+
+      <h3>Orden detectada</h3>
+      <div id="detected" class="cmd">—</div>
+
+      <div class="row" style="justify-content:space-between">
+        <div class="muted">Fuente: <span id="source">local</span></div>
+        <div class="muted">Confianza: <span id="conf">—</span></div>
+      </div>
+
+      <h3>Log</h3>
+      <pre id="log" class="log" aria-live="polite"></pre>
+    </section>
+
+    <aside class="card">
+      <h3>Órdenes soportadas (11)</h3>
+      <div class="list" id="list"></div>
+      <hr style="opacity:.15; margin:12px 0">
+      <details>
+        <summary>Activar respaldo con OpenAI</summary>
+        <ol>
+          <li>Backend con <code>POST /api/intent</code> y tu <code>OPENAI_API_KEY</code> (sólo servidor).</li>
+          <li>Ajusta <code>OPENAI_ENDPOINT</code> si tu backend está en otra URL.</li>
+        </ol>
+      </details>
+    </aside>
+  </main>
+
+  
+
+ <script>
+  // ===== Config =====
+  // Backend en el puerto 5500:
+  const OPENAI_ENDPOINT = "http://localhost:5500/api/intent";
+  // Si habilitas el endpoint de transcripción en tu server:
+  // const TRANSCRIBE_ENDPOINT = "http://localhost:5500/api/transcribe";
+
+  const USE_OPENAI = true;              // ponlo en false si no tienes backend aún
+  const WAKE_WORD = "axel";             // wake word (en minúsculas tras normalizar)
+  const WAKE_WINDOW_MS = 6000;          // <-- Ventanita: 6 segundos
+
+  // Estado de activación tipo “asistente”
+  let armed = false;
+  let lastWake = 0;
+
+  // Catálogo fijo
+  const COMMANDS = [
+    "adelante","atrás","detener",
+    "vuelta adelante derecha","vuelta adelante izquierda",
+    "vuelta atrás derecha","vuelta atrás izquierda",
+    "giro 90 derecha","giro 90 izquierda",
+    "giro 360 derecha","giro 360 izquierda"
+  ];
+
+  // ==== Léxico / sinónimos / palabras clave ====
+  const INTENTS = {
+    "adelante": { exact:["adelante"], any:["avanza","avanzar","hacia adelante","ve","marcha","forward"], none:["atrás","reversa","retrocede"] },
+    "atrás":   { exact:["atrás"], any:["reversa","retrocede","hacia atrás","marcha atrás","back","atrás"] },
+    "detener": { exact:["detener"], any:["alto","para","detente","stop","parar","frena"] },
+    "vuelta adelante derecha": { any:["vuelta","gira","curva","dobla"], must:["adelante","avanza","hacia adelante"], side:["derecha"] },
+    "vuelta adelante izquierda":{ any:["vuelta","gira","curva","dobla"], must:["adelante","avanza","hacia adelante"], side:["izquierda"] },
+    "vuelta atrás derecha":    { any:["vuelta","gira","curva","dobla"], must:["atrás","reversa","retrocede","hacia atrás"], side:["derecha"] },
+    "vuelta atrás izquierda":  { any:["vuelta","gira","curva","dobla"], must:["atrás","reversa","retrocede","hacia atrás"], side:["izquierda"] },
+    "giro 90 derecha":         { any:["gira","giro","dobla","voltea"], deg:["90","noventa","90°"], side:["derecha"] },
+    "giro 90 izquierda":       { any:["gira","giro","dobla","voltea"], deg:["90","noventa","90°"], side:["izquierda"] },
+    "giro 360 derecha":        { any:["gira","giro","dar","haz"], deg:["360","trescientos sesenta","360°","vuelta completa","una vuelta"], side:["derecha"] },
+    "giro 360 izquierda":      { any:["gira","giro","dar","haz"], deg:["360","trescientos sesenta","360°","vuelta completa","una vuelta"], side:["izquierda"] },
+  };
+
+  // ===== Utilidades =====
+  const $ = sel => document.querySelector(sel);
+  const log = msg => { const el = $("#log"); el.textContent += `\n${new Date().toLocaleTimeString()}  ${msg}`; el.scrollTop = el.scrollHeight; };
+  const setStatus = (text, color="var(--muted)") => { $("#statusText").textContent = text; $("#statusDot").style.color = color; };
+
+  const normalize = s => s
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .replace(/[^a-z0-9\s]/g," ")
+    .replace(/\s+/g," ")
+    .trim();
+
+  function normalizeNumbers(s){
+    return s
+      .replace(/\btrescientos sesenta\b/g, "360")
+      .replace(/\bnoventa grados\b/g, "90")
+      .replace(/\bnoventa\b/g, "90")
+      .replace(/\b360 grados\b/g, "360")
+      .replace(/\buna vuelta completa\b/g, "360")
+      .replace(/\buna vuelta\b/g, "360");
+  }
+
+  const listEl = $("#list");
+  COMMANDS.forEach(c => { const d=document.createElement("div"); d.className="cmd"; d.textContent=c; listEl.appendChild(d); });
+
+  // ===== Matching difuso =====
+  function scoreForIntent(text, intentName){
+    const t = normalizeNumbers(normalize(text));
+    const words = t.split(" ");
+    const has = (w) => t.includes(normalize(w));
+    const cfg = INTENTS[intentName] || {};
+    let score = 0;
+
+    (cfg.exact||[]).forEach(p => { if(has(p)) score += 3; });
+    (cfg.any||[]).forEach(k => { if(has(k)) score += 1.2; });
+
+    let missMust = false;
+    if(cfg.must){ cfg.must.forEach(m => { if(has(m)) score += 1.5; else missMust = true; }); }
+    (cfg.deg||[]).forEach(d => { if(has(d)) score += 1.5; });
+
+    let sideHit = 0;
+    if(cfg.side){ cfg.side.forEach(s => { if(has(s)) sideHit++; }); if(sideHit>0) score += 1.5; }
+    if(cfg.side?.includes("derecha") && has("izquierda")) score -= 0.8;
+    if(cfg.side?.includes("izquierda") && has("derecha")) score -= 0.8;
+
+    if(cfg.none){ cfg.none.forEach(n => { if(has(n)) score -= 1.2; }); }
+    score += Math.min(words.length, 8) * 0.05;
+    if(missMust) score -= 1.0;
+    return score;
+  }
+
+  function fuzzyMatch(text){
+    let best = { command:null, score:-Infinity };
+    for(const cmd of COMMANDS){
+      const sc = scoreForIntent(text, cmd);
+      if(sc > best.score) best = { command: cmd, score: sc };
+    }
+    return best;
+  }
+
+  async function openAIClassify(text){
+    try{
+      const res = await fetch(OPENAI_ENDPOINT,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ text, commands: COMMANDS })
+      });
+      if(!res.ok) throw new Error(`HTTP ${res.status}`);
+      return await res.json();
+    }catch(err){ log(`OpenAI fallo: ${err.message}`); return null; }
+  }
+
+  function emitCommand(cmd){
+    const evt = new CustomEvent("car-command",{ detail:{ command:cmd, ts:Date.now() }});
+    window.dispatchEvent(evt);
+    log(`Emitido car-command: ${cmd}`);
+    // Integración HTTP opcional:
+    // fetch("http://TU-ESP32/command",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({command:cmd})});
+  }
+
+  function showDetection({command, confidence, source}){
+    $("#detected").textContent = command || "—";
+    $("#conf").textContent = (confidence!=null) ? Number(confidence).toFixed(2) : "—";
+    $("#source").textContent = source || "local";
+    if(command) emitCommand(command);
+  }
+
+  // ===== Wake word helpers =====
+  const containsWake = (t) => t.includes(WAKE_WORD);
+  const extractAfterWake = (t) => {
+    const idx = t.indexOf(WAKE_WORD);
+    if(idx === -1) return null;
+    return t.slice(idx + WAKE_WORD.length).trim();
+  };
+  const isWindowOpen = () => armed && (Date.now() - lastWake) <= WAKE_WINDOW_MS;
+  const arm = () => { armed = true; lastWake = Date.now(); log(`Wake: "Axel". Ventana ${WAKE_WINDOW_MS/1000}s abierta.`); setStatus("esperando orden", "var(--warn)"); };
+  const disarm = () => { armed = false; setStatus("escuchando","var(--ok)"); };
+
+  async function classifyAndEmit(text){
+    const fm = fuzzyMatch(text);
+    let best = { command: fm.command, confidence: (fm.score/6), source: "local" };
+    if(USE_OPENAI){
+      const ai = await openAIClassify(text);
+      if(ai && ai.command){ if((ai.confidence ?? 0) >= (best.confidence ?? 0) - 0.05){ best = ai; } }
+    }
+    const THRESH = 0.45;
+    if((best.confidence ?? 0) < THRESH){
+      log(`Confianza baja (${(best.confidence||0).toFixed(2)}). No emito.`);
+      showDetection({ command:null, confidence:best.confidence, source:best.source });
+      return false;
+    }
+    showDetection(best);
+    return true;
+  }
+
+  async function decide(text){
+    $("#transcript").textContent = text || "—";
+    const raw = normalizeNumbers(normalize(text));
+
+    // Caso 1: "one-shot" -> "axel + comando"
+    if(containsWake(raw)){
+      const after = extractAfterWake(raw);
+      if(after){ await classifyAndEmit(after); disarm(); return; }
+      // Dijo sólo "Axel"
+      arm();
+      return;
+    }
+
+    // Caso 2: ventana abierta -> interpreta como comando
+    if(isWindowOpen()){
+      await classifyAndEmit(raw);
+      disarm();
+      return;
+    }
+
+    // Caso 3: ignorar si no hay wake ni ventana
+    log(`Ignorado (di "Axel" primero).`);
+  }
+
+  // ===== Speech Recognition =====
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let recognition = null, listening = false;
+
+  if(!SpeechRecognition){
+    setStatus("no soportado","var(--err)");
+    log("Este navegador no soporta SpeechRecognition.");
+    // (Opcional) aquí podrías usar TRANSCRIBE_ENDPOINT con MediaRecorder como fallback.
+  } else {
+    recognition = new SpeechRecognition();
+    recognition.lang = "es-MX";
+    recognition.interimResults = true;
+    recognition.continuous = true;
+
+    recognition.onstart = () => setStatus(armed ? "esperando orden" : "escuchando","var(--ok)");
+    recognition.onend = () => { setStatus("inactivo"); listening=false; $("#btnMic").setAttribute("aria-pressed","false"); $("#btnMic").textContent="🎤 Iniciar"; };
+    recognition.onerror = (e) => { setStatus("error","var(--err)"); log(`SR error: ${e.error}`); };
+
+    recognition.onresult = (event) => {
+      for(let i=event.resultIndex; i<event.results.length; i++){
+        const res = event.results[i], txt = res[0].transcript;
+        if(res.isFinal){
+          const utter = (txt||"").trim();
+          if(utter) decide(utter);
+        } else {
+          const interim = (txt||"").trim();
+          if(interim) $("#transcript").textContent = interim;
+        }
+      }
+    };
+  }
+
+  // ===== UI =====
+  $("#btnMic").addEventListener("click", () => {
+    if(!recognition) return;
+    if(!listening){
+      recognition.start(); listening = true;
+      $("#btnMic").setAttribute("aria-pressed","true");
+      $("#btnMic").textContent = "⏹️ Detener";
+      setStatus(armed ? "esperando orden" : "escuchando","var(--ok)");
+      log("Mic ON");
+    } else {
+      recognition.stop(); log("Mic OFF");
+    }
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if(e.code === "Space" && !e.repeat){ e.preventDefault(); $("#btnMic").click(); }
+  });
+
+  $("#btnTest").addEventListener("click", async () => {
+    const sample = prompt("Prueba (ej. 'Axel giro 90 derecha' o 'Axel' … [espera] … 'giro 90 derecha'):", "Axel giro 90 derecha");
+    if(sample) await decide(sample);
+  });
+
+  $("#btnClear").addEventListener("click", () => {
+    $("#log").textContent = "";
+    $("#transcript").textContent = "—";
+    showDetection({ command:null, confidence:null, source:"local" });
+    disarm();
+  });
+
+  // Listener para integrar con tu robot (HTTP/WebSocket)
+  window.addEventListener("car-command", (e) => {
+    // fetch("http://TU-ESP32/command", { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(e.detail) });
+  });
+</script>
+
+</body>
+</html>
